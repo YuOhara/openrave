@@ -567,9 +567,9 @@ public:
             return ct;
         }
 
-        if(_robot->CheckSelfCollision(_report)) {
-            ct |= CT_SelfCollision;
-        }
+        // if(_robot->CheckSelfCollision(_report)) {
+        //     ct |= CT_SelfCollision;
+        // }
         return ct;
     }
 
