@@ -38,6 +38,7 @@ public:
     }
     bool InitPlan(RobotBasePtr pbase, PlannerParametersConstPtr pparams)
     {
+
         EnvironmentMutex::scoped_lock lock(GetEnv()->GetMutex());
         _robot = pbase;
 
@@ -66,6 +67,7 @@ public:
 
     PlannerStatus PlanPath(TrajectoryBasePtr ptraj)
     {
+
         if(!_parameters) {
             return PS_Failed;
         }
@@ -567,9 +569,9 @@ public:
             return ct;
         }
 
-        if(_robot->CheckSelfCollision(_report)) {
-            ct |= CT_SelfCollision;
-        }
+        // if(_robot->CheckSelfCollision(_report)) {
+        //     ct |= CT_SelfCollision;
+        // }
         return ct;
     }
 
@@ -583,6 +585,8 @@ public:
 protected:
     virtual int _MoveStraight(TrajectoryBasePtr ptraj, const Vector& vapproachdir, vector<dReal>& dofvals, int checkcollisions)
     {
+      RAVELOG_WARN("hogehoge!");
+      RAVELOG_DEBUG("fuga!");
         dReal* pX = NULL, *pY = NULL, *pZ = NULL;
         if( _robot->GetAffineDOF() & DOF_X ) {
             pX = &dofvals.at(_robot->GetAffineDOFIndex(DOF_X));
@@ -653,6 +657,7 @@ protected:
         }
         // know the robot is not in collision at this point
         v = vapproachdir * (_parameters->ffinestep*_parameters->ftranslationstepmult);
+        int move_back_num=0;
         while(1) {
             if( pX != NULL ) {
                 *pX += v.x;
@@ -666,21 +671,79 @@ protected:
             _robot->SetActiveDOFValues(dofvals,KinBody::CLA_CheckLimitsSilent);
 
             if(_parameters->breturntrajectory) {
-                ptraj->Insert(ptraj->GetNumWaypoints(),dofvals, _robot->GetActiveConfigurationSpecification());
+              ptraj->Insert(ptraj->GetNumWaypoints(),dofvals, _robot->GetActiveConfigurationSpecification());
             }
-
             ct = 0;
+            vector< pair<CollisionReport::CONTACT,int> > contacts;
             for(int q = 0; q < (int)_vlinks.size(); q++) {
-                ct = _CheckCollision(KinBody::LinkConstPtr(_vlinks[q]), targetbody);
-                if( ct&checkcollisions ) {
-                    break;
-                }
+              ct = _CheckCollision(KinBody::LinkConstPtr(_vlinks[q]), targetbody);
+              if( ct&checkcollisions ) {
+                break;
+              }
             }
             if( ct&checkcollisions ) {
-                break;
+              GetEnv()->GetCollisionChecker()->SetCollisionOptions(CO_Contacts);
+              std::vector<KinBody::LinkPtr> vlinks;
+              _robot->GetActiveManipulator()->GetChildLinks(vlinks);
+              std::set <int> indexs;
+              std::string names = std::string("");
+              FOREACHC(itlink, vlinks) {
+                if( GetEnv()->CheckCollision(KinBody::LinkConstPtr(*itlink), KinBodyConstPtr(_parameters->targetbody), _report) ) {
+                  RAVELOG_VERBOSE(str(boost::format("contact %s\n")%_report->__str__()));
+                  FOREACH(itcontact,_report->contacts) {
+                    if( _report->plink1 != *itlink ) {
+                      itcontact->norm = -itcontact->norm;
+                      itcontact->depth = -itcontact->depth;
+                    }
+                    contacts.push_back(make_pair(*itcontact,(*itlink)->GetIndex()));
+                    indexs.insert((*itlink)->GetIndex());
+                    names = names + std::string(" ") + (*itlink)->GetName();
+                  }
+                }
+              }
+              if (move_back_num > 10){
+                  RAVELOG_WARN("move back extends!");
+                  break;
+              }
+              if (indexs.size() > 1)
+                {
+                  RAVELOG_WARN(str(boost::format("SUCEESS!! contact %d\n")%indexs.size()));
+                  RAVELOG_WARN(str(boost::format("SUCEESS!! names %s\n")%names));
+                  break;
+                }
+              else{
+                ct = 0;
+                Vector v_temp = -contacts.at(0).first.norm * (_parameters->ffinestep*_parameters->ftranslationstepmult*0.5);
+                move_back_num+=1;
+                for( int back_num = 0; back_num < 10; back_num++) {
+                  // move back
+                  RAVELOG_WARN(str(boost::format("move back %d\n")%back_num));
+                  if( pX != NULL ) {
+                    *pX += v_temp.x;
+                  }
+                  if( pY != NULL ) {
+                    *pY += v_temp.y;
+                  }
+                  if( pZ != NULL ) {
+                    *pZ += v_temp.z;
+                  }
+                  _robot->SetActiveDOFValues(dofvals,KinBody::CLA_CheckLimitsSilent);
+                  int ct_temp = 0;
+                  for(int q = 0; q < (int)_vlinks.size(); q++) {
+                    ct_temp = _CheckCollision(KinBody::LinkConstPtr(_vlinks[q]), targetbody);
+                    if( ct_temp&checkcollisions ) {
+                      break;
+                    }
+                  }
+                  if (! (ct_temp&checkcollisions))
+                    break;
+                }
+              }
+            }
+            if ( ct&checkcollisions ){
+              break;
             }
         }
-
         return ct;
     }
     CollisionReportPtr _report;
